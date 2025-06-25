@@ -28,7 +28,7 @@ jobs:
           set -euo pipefail
   
           # Grab the compose file once in JSON form
-          COMPOSE=$(docker compose -f docker-compose.yml config --format json)
+          COMPOSE=$(docker compose -f docker-compose.yaml config --format json)
   
           # Iterate over all services
           echo "$COMPOSE" | jq -r '.services | keys[]' | while read svc; do
