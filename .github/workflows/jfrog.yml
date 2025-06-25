@@ -1,11 +1,10 @@
 name: Build and Tag Docker Image
 
 on:
-  workflow_dispatch:  
+  workflow_dispatch:
   push:
-    branches:
-      - main
-      
+    branches: [ main ]
+
 jobs:
   build-and-tag:
     runs-on: ubuntu-latest
@@ -16,7 +15,7 @@ jobs:
       TAG:      ${{ github.run_number }}
       JFROG_CLI_BUILD_NAME: compose-build
       JFROG_CLI_BUILD_NUMBER: ${{ github.run_number }}
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
@@ -24,46 +23,53 @@ jobs:
       - name: Setup JFrog CLI
         uses: jfrog/setup-jfrog-cli@v4
         env:
-          JF_URL: ${{ vars.JF_URL }}
-          JF_ACCESS_TOKEN: ${{ secrets.JF_ACCESS_TOKEN }}
+          JF_URL:           ${{ vars.JF_URL }}
+          JF_ACCESS_TOKEN:  ${{ secrets.JF_ACCESS_TOKEN }}
 
-      - name: Install jq (used to parse docker-compose)
+      - name: Install jq (parse docker-compose)
         run: sudo apt-get update && sudo apt-get install -y jq
-  
-      - name: Build **every** service and push
+
+      - name: Build services **only if they have build.context**
         shell: bash
         run: |
           set -euo pipefail
-  
-          # Grab the compose file once in JSON form
+
+          # Convert compose file to JSON once
           COMPOSE=$(docker compose -f docker-compose.yaml config --format json)
-  
-          # Iterate over all services
+
           echo "$COMPOSE" | jq -r '.services | keys[]' | while read svc; do
-            # Extract context & (optional) custom Dockerfile
-            context=$(echo "$COMPOSE" | jq -r ".services[\"$svc\"].build.context // \"./$svc\"")
-            dockerfile=$(echo "$COMPOSE" | jq -r ".services[\"$svc\"].build.dockerfile // \"Dockerfile\"")
-  
+            # Pick out build section if it exists
+            build_json=$(echo "$COMPOSE" | jq -c ".services[\"$svc\"].build // empty")
+
+            # Skip services with no build section at all
+            if [[ -z "$build_json" || "$build_json" == "null" ]]; then
+              echo "➡️  Skipping $svc – no build section"
+              continue
+            fi
+
+            # Handle both shorthand and object forms of 'build'
+            context=$(echo "$build_json" | jq -r 'if type=="string" then . else .context // "" end')
+
+            if [[ -z "$context" ]]; then
+              echo "➡️  Skipping $svc – build.context missing"
+              continue
+            fi
+
+            dockerfile=$(echo "$build_json" | jq -r 'if type=="string" then "Dockerfile" else .dockerfile // "Dockerfile" end')
             img="${REGISTRY}/${REPO}/${svc}:${TAG}"
-  
-            echo -e "\n=== Building $img ==="
+
+            echo -e "\n=== Building $img (context: $context, dockerfile: $dockerfile) ==="
             jf docker build -f "${context}/${dockerfile}" -t "$img" "$context"
-  
+
             echo -e "\n--- Pushing $img ---"
             jf docker push "$img"
           done
-          
-      - name: Publish Build info With JFrog CLI
+
+      - name: Publish build info to Artifactory
         env:
-          # Generated and maintained by GitHub
           JFROG_CLI_BUILD_NAME: jfrog-docker-build-example
-          # JFrog organization secret
-          JFROG_CLI_BUILD_NUMBER : ${{ github.run_number }}
+          JFROG_CLI_BUILD_NUMBER: ${{ github.run_number }}
         run: |
-          # Export the build name and build nuber
-          # Collect environment variables for the build
           jf rt build-collect-env
-          # Collect VCS details from git and add them to the build
           jf rt build-add-git
-          # Publish build info
           jf rt build-publish
