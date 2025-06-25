@@ -19,13 +19,31 @@ jobs:
           JF_URL: ${{ vars.JF_URL }}
           JF_ACCESS_TOKEN: ${{ secrets.JF_ACCESS_TOKEN }}
 
-      - name: Build Tag and push Docker Image
-        env:
-          IMAGE_NAME: tsew.jfrog.io/robot-shop-docker/jfrog-docker-example-image:${{ github.run_number }}
+      - name: Install jq (used to parse docker-compose)
+        run: sudo apt-get update && sudo apt-get install -y jq
+  
+      - name: Build **every** service and push
+        shell: bash
         run: |
-          cd cart
-          jf docker build -t $IMAGE_NAME .
-          jf docker push $IMAGE_NAME
+          set -euo pipefail
+  
+          # Grab the compose file once in JSON form
+          COMPOSE=$(docker compose -f docker-compose.yml config --format json)
+  
+          # Iterate over all services
+          echo "$COMPOSE" | jq -r '.services | keys[]' | while read svc; do
+            # Extract context & (optional) custom Dockerfile
+            context=$(echo "$COMPOSE" | jq -r ".services[\"$svc\"].build.context // \"./$svc\"")
+            dockerfile=$(echo "$COMPOSE" | jq -r ".services[\"$svc\"].build.dockerfile // \"Dockerfile\"")
+  
+            img="${REGISTRY}/${REPO}/${svc}:${TAG}"
+  
+            echo -e "\n=== Building $img ==="
+            jf docker build -f "${context}/${dockerfile}" -t "$img" "$context"
+  
+            echo -e "\n--- Pushing $img ---"
+            jf docker push "$img"
+          done
           
       - name: Publish Build info With JFrog CLI
         env:
